@@ -1,0 +1,32 @@
+MetaConfig:
+  save_dir: "checkpoints/20210512/contrastive"
+  name: "patient_id"
+  feature_dim: 100
+
+BaseModelConfig:
+  data_dim: 4
+  data_length: 6000
+  input_size: 240
+  hidden_size: 300
+
+TrainerConfig:
+  device: "cuda:1"
+  lr: 0.05
+  batch_size: 512
+  start_epoch: 0
+  epochs: 100
+  save_freq: 10
+  print_freq: 20
+  dataset_path: "data/processed/all_raw.pkl"
+  momentum: 0.9  # SGD momentum
+  weight_decay: 1.e-4
+  cos: true
+  schedules: null
+  save_dir: "checkpoints/20210512/contrastive"
+  resized_output_size: 6000
+  crop_scale: 0.8
+  warm: true
+  warm_epochs: 10
+  warmup_from: 0.01
+  warmup_to: 0.05
+  lr_decay_rate: 0.1

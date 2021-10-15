@@ -1,0 +1,33 @@
+MetaConfig:
+  save_dir: "checkpoints/moco"
+  name: "patient_id"
+  feature_dim: 32
+
+BaseModelConfig:
+  data_dim: 4
+  data_length: 6000
+  input_size: 240
+  hidden_size: 300
+
+MoCoConfig:
+  queue_size: 65536
+  momentum: 0.999
+  temperature: 0.07
+  normalize: true
+
+TrainerConfig:
+  device: "cuda:0"
+  lr: 0.001
+  batch_size: 512
+  start_epoch: 0
+  epochs: 100
+  save_freq: 10
+  print_freq: 100
+  dataset_path: "data/processed/all_raw.pkl"
+  momentum: 0.9  # SGD momentum
+  weight_decay: 5.e-4
+  cos: true
+  schedules: null
+  save_dir: "checkpoints/moco"
+  resized_output_size: 6000
+  crop_scale: 0.8
