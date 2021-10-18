@@ -13,6 +13,6 @@ class EEGDataset(Dataset):
 
     def __getitem__(self, idx):
         x = self.values[idx]
-        x[x > 23] = 23
-        x[x < -23] = -23
+        x[x > 23] = 23      # hard-coded threshold; need improvement
+        x[x < -23] = -23    # hard-coded threshold; need improvement
         return self.transform(x), self.targets[idx]
