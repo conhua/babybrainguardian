@@ -1,7 +1,7 @@
 from torch.utils.data import Dataset
 
 
-class PBSFDataset(Dataset):
+class EEGDataset(Dataset):
 
     def __init__(self, data, transform):
         self.values = [x["values"] for x in data]
@@ -13,6 +13,6 @@ class PBSFDataset(Dataset):
 
     def __getitem__(self, idx):
         x = self.values[idx]
-        x[x > 23] = 23
-        x[x < -23] = -23
+        x[x > 23] = 23      # hard-coded threshold; need improvement
+        x[x < -23] = -23    # hard-coded threshold; need improvement
         return self.transform(x), self.targets[idx]

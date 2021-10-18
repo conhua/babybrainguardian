@@ -1,5 +1,5 @@
 MetaConfig:
-  save_dir: "checkpoints/moco"
+  save_dir: ""
   name: "patient_id"
   feature_dim: 32
 
@@ -23,11 +23,11 @@ TrainerConfig:
   epochs: 100
   save_freq: 10
   print_freq: 100
-  dataset_path: "data/processed/all_raw.pkl"
+  dataset_path: ""
   momentum: 0.9  # SGD momentum
   weight_decay: 5.e-4
   cos: true
   schedules: null
-  save_dir: "checkpoints/moco"
+  save_dir: ""
   resized_output_size: 6000
   crop_scale: 0.8

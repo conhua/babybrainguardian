@@ -1,86 +1,91 @@
-import torch.nn as nn
 import torch
-import time
-import math
-from torch.utils.data import DataLoader
-from src.pbsf_dataset import PBSFDataset
-from src.utils import AverageMeter, ProgressMeter
-import pickle
-import numpy as np
-import lightgbm as lgb
-from sklearn.metrics import roc_auc_score
+import torch.nn as nn
 import os
-from src import transforms
+from torch.utils.data import DataLoader
+from src.utils import AverageMeter,ProgressMeter
+from sklearn.metrics import roc_auc_score
+import time
+import pickle
+import src.transforms as transforms
+from src.eeg_dataset import EEGDataset
+import lightgbm as lgb
+import numpy as np
+import math
 
 
-class MoCo(nn.Module):
-    def __init__(self, encoder_q, encoder_k, moco_config):
-        super(MoCo, self).__init__()
-        self.queue_size = moco_config.queue_size
-        self.momentum = moco_config.momentum
-        self.temperature = moco_config.temperature
-        self.encoder_q = encoder_q
-        self.encoder_k = encoder_k
-        self.feature_dim = moco_config.feature_dim
-        for param_q, param_k in zip(self.encoder_q.parameters(), self.encoder_k.parameters()):
-            param_k.data.copy_(param_q.data)
-            param_k.requires_grad = False
+class SupConLoss(nn.Module):
 
-        self.register_buffer("queue", torch.randn(self.feature_dim, self.queue_size))
-        if moco_config.normalize:
-            self.queue = nn.functional.normalize(self.queue, dim=0)
-        self.register_buffer("queue_ptr", torch.zeros(1, dtype=torch.long))
+    def __init__(self, temperature=0.07, contrast_mode="all", base_temperature=0.07, device="cpu"):
+        super(SupConLoss, self).__init__()
+        self.temperature = temperature
+        self.base_temperature = base_temperature
+        self.contrast_mode = contrast_mode
+        self.device = device
 
-    @torch.no_grad()
-    def _momentum_update_key_encoder(self):
-        for param_q, param_k in zip(self.encoder_q.parameters(), self.encoder_k.parameters()):
-            param_k.data = self.momentum * param_k.data + (1 - self.momentum) * param_q.data
+    def forward(self, features, labels=None, mask=None):
+        batch_size = features.size(0)
+        if labels is not None and mask is not None:
+            raise ValueError("Cannot define both `labels` and `mask`")
+        elif labels is None and mask is None:
+            mask = torch.eye(batch_size, dtype=torch.float32).to(self.device)
+        elif labels is not None:
+            labels = labels.contiguous().view(-1, 1)
+            if labels.shape[0] != batch_size:
+                raise ValueError("Number of labels does not equal to number of features.")
+            mask = torch.eq(labels, labels.T).float().to(self.device)
+        else:
+            mask = mask.float().to(self.device)
 
-    @torch.no_grad()
-    def _dequeue_and_enqueue(self, keys):
-        batch_size = keys.size(0)
-        ptr = int(self.queue_ptr)
-        if self.queue_size % batch_size != 0:  # for simplicity
-            pass
-        self.queue[:, ptr: ptr + batch_size] = keys.T
-        ptr = (ptr + batch_size) % self.queue_size
-        self.queue_ptr[0] = ptr
+        contrast_count = features.size(1)
+        contrast_feature = torch.cat(torch.unbind(features, dim=1), dim=0)
+        if self.contrast_mode == "one":
+            anchor_feature = features[:, 0]
+            anchor_count = 1
+        elif self.contrast_mode == "all":
+            anchor_feature = contrast_feature
+            anchor_count = contrast_count
+        else:
+            raise ValueError(f"Unknown mode {self.contrast_mode}")
 
-    def encode(self, inputs):
-        return self.encoder_q(inputs)
+        anchor_dot_contrast = torch.div(torch.matmul(anchor_feature, contrast_feature.T), self.temperature)
+        logits_max, _ = torch.max(anchor_dot_contrast, dim=1, keepdim=True)
+        logits = anchor_dot_contrast - logits_max.detach()
 
-    def forward(self, input_q, input_k):
-        q = self.encoder_q(input_q)  # N x C
-        q = nn.functional.normalize(q, dim=1)
+        mask = mask.repeat(anchor_count, contrast_count)
+        # mask-out self-contrast cases
+        logits_mask = torch.scatter(
+            torch.ones_like(mask),
+            1,
+            torch.arange(batch_size * anchor_count).view(-1, 1).to(self.device),
+            0
+        )
+        mask = mask * logits_mask
 
-        with torch.no_grad():
-            self._momentum_update_key_encoder()
-            k = self.encoder_k(input_k)
-            k = nn.functional.normalize(k, dim=1)
+        # compute log_prob
+        exp_logits = torch.exp(logits) * logits_mask
+        log_prob = logits - torch.log(exp_logits.sum(1, keepdim=True) + 1e-30)
 
-        l_pos = torch.einsum("nc,nc->n", q, k).unsqueeze(-1)
-        l_neg = torch.einsum("nc,ck->nk", q, self.queue.clone().detach())
-        logits = torch.cat([l_pos, l_neg], dim=1)
-        logits /= self.temperature
+        # compute mean of log-likelihood over positive
+        mean_log_prob_pos = (mask * log_prob).sum(1) / mask.sum(1)
 
-        labels = torch.zeros(logits.size(0)).to(logits)
-        labels = labels.type(torch.long)
-        self._dequeue_and_enqueue(k)
-        return logits, labels
+        # loss
+        loss = - (self.temperature / self.base_temperature) * mean_log_prob_pos
+        loss = loss.view(anchor_count, batch_size).mean()
+
+        return loss
 
 
-class MoCoTrainer:
+class ContrastiveTrainer:
     def __init__(self, model, config):
-        super(MoCoTrainer, self).__init__()
+        super(ContrastiveTrainer, self).__init__()
         self.model = model
         self.config = config
         self.train_set, self.train_cls_set, self.test_cls_set = self.create_dataset()
         self.optimizer = self.create_optimizer()
-        self.criterion = nn.CrossEntropyLoss()
         self.device = config.device
+        self.criterion = SupConLoss(device=config.device)
         self.model.to(config.device)
         self.save_dir = os.path.join(config.save_dir, config.name)
-        os.makedirs(self.save_dir, exist_ok=True)
 
     def train(self):
         train_loader = DataLoader(
@@ -119,16 +124,17 @@ class MoCoTrainer:
         self.model.train()
         end = time.time()
 
-        for i, (inputs, _) in enumerate(train_loader):
-            input_q = inputs[0]
-            input_k = inputs[1]
+        for i, (inputs, labels) in enumerate(train_loader):
             data_time.update(time.time() - end)
-            input_q = input_q.to(self.device)
-            input_k = input_k.to(self.device)
-            output, target = self.model(input_q, input_k)
-            loss = self.criterion(output, target)
-
-            losses.update(loss.item(), input_q.size(0))
+            batch_size = labels.size(0)
+            inputs = torch.cat([inputs[0], inputs[1]], dim=0)
+            inputs = inputs.to(self.device)
+            # self.warmup_learning_rate(epoch, i, len(train_loader))
+            features = self.model(inputs)
+            f1, f2 = torch.split(features, [batch_size, batch_size], dim=0)
+            f = torch.cat([f1.unsqueeze(1), f2.unsqueeze(1)], dim=1)
+            loss = self.criterion(f, labels)
+            losses.update(loss.item(), labels.size(0))
             self.optimizer.zero_grad()
             loss.backward()
             self.optimizer.step()
@@ -161,7 +167,7 @@ class MoCoTrainer:
         with torch.no_grad():
             for _, (inputs, _) in enumerate(dataloader):
                 inputs = inputs.to(self.device)
-                reps = self.model.encode(inputs)
+                reps = self.model(inputs)
                 representations.append(reps.cpu().numpy())
         return np.concatenate(representations)
 
@@ -171,9 +177,9 @@ class MoCoTrainer:
             transforms.RandomResizedCrop(self.config.resized_output_size, self.config.crop_scale)
         )
         cls_transform = transforms.ToTensor()
-        train_set = PBSFDataset(train_data, rep_transform)
-        train_cls_set = PBSFDataset(train_data, cls_transform)
-        test_cls_set = PBSFDataset(test_data, cls_transform)
+        train_set = EEGDataset(train_data, rep_transform)
+        train_cls_set = EEGDataset(train_data, cls_transform)
+        test_cls_set = EEGDataset(test_data, cls_transform)
         return train_set, train_cls_set, test_cls_set
 
     def create_optimizer(self):
@@ -185,10 +191,24 @@ class MoCoTrainer:
     def adjust_learning_rate(self, epoch):
         lr = self.config.lr
         if self.config.cos:
-            lr *= 0.5 * (1. + math.cos(math.pi * epoch / self.config.epochs))
+            eta_min = lr * (self.config.lr_decay_rate ** 3)
+            lr = eta_min + (lr - eta_min) * (
+                1 + math.cos(math.pi * epoch / self.config.epochs)
+            ) / 2
         else:
-            for m in self.config.schedule:
-                lr *= 0.1 if epoch >= m else 1.
+            steps = np.sum(epoch > np.asarray(self.config.schedule))
+            if steps > 0:
+                lr = lr * (self.config.lr_decay_rate ** steps)
+        for param_group in self.optimizer.param_groups:
+            param_group["lr"] = lr
+
+    def warmup_learning_rate(self, epoch, batch_id, total_batches):
+        lr = self.config.lr
+        if self.config.warm and epoch <= self.config.warm_epochs:
+            p = (batch_id + (epoch - 1) * total_batches) / \
+                (self.config.warm_epochs * total_batches)
+            lr = self.config.warmup_from + p * (self.config.warmup_to - self.config.warmup_from)
+
         for param_group in self.optimizer.param_groups:
             param_group["lr"] = lr
 
@@ -213,3 +233,7 @@ class MoCoTrainer:
         checkpoints = torch.load(save_dir)
         self.model.load_state_dict(checkpoints["state_dict"])
         self.optimizer.load_state_dict(checkpoints["optimizer"])
+
+
+if __name__=="__main__":
+    pass
