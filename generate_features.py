@@ -13,7 +13,7 @@ parser = argparse.ArgumentParser()
 parser.add_argument("--config-file", type=str, default="")
 parser.add_argument("--method", type=str, default="contrastive")
 parser.add_argument("--model-ckpt", type=str, default="best_ckpt.pt")
-parser.add_argument("--save-dir", type=str, default="features/20210512/contrastive")
+parser.add_argument("--save-dir", type=str, default="f")
 
 
 if __name__ == "__main__":

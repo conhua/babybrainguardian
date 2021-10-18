@@ -7,7 +7,7 @@ from sklearn.metrics import roc_auc_score
 import time
 import pickle
 import src.transforms as transforms
-from src.pbsf_dataset import PBSFDataset
+from src.eeg_dataset import EEGDataset
 import lightgbm as lgb
 import numpy as np
 import math
@@ -177,9 +177,9 @@ class ContrastiveTrainer:
             transforms.RandomResizedCrop(self.config.resized_output_size, self.config.crop_scale)
         )
         cls_transform = transforms.ToTensor()
-        train_set = PBSFDataset(train_data, rep_transform)
-        train_cls_set = PBSFDataset(train_data, cls_transform)
-        test_cls_set = PBSFDataset(test_data, cls_transform)
+        train_set = EEGDataset(train_data, rep_transform)
+        train_cls_set = EEGDataset(train_data, cls_transform)
+        test_cls_set = EEGDataset(test_data, cls_transform)
         return train_set, train_cls_set, test_cls_set
 
     def create_optimizer(self):

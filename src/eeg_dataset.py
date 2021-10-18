@@ -1,7 +1,7 @@
 from torch.utils.data import Dataset
 
 
-class PBSFDataset(Dataset):
+class EEGDataset(Dataset):
 
     def __init__(self, data, transform):
         self.values = [x["values"] for x in data]
